@@ -1,12 +1,14 @@
-# BTT TFT35 with Klipper — Stock Firmware + tftbridge
+# BTT TFT35 with Klipper: Stock Firmware + tftbridge
 
-I got my BTT TFT35 V3.0 fully working with Klipper on an Ender 5 Plus using the stock BTT firmware and tftbridge. There's a lot of incomplete info out there, so I'm documenting everything that actually worked — including some enhancements I made to tftbridge and a hardware reset button mod. Hopefully this saves someone else the pain.
+*I used AI to help write up and organize this post. The experience, testing, and code are all mine.*
 
-I'm running **stock BTT firmware** (not the Klipper fork) because it's more stable and better tested. The bridge is [tftbridge](https://github.com/oldhui-uk/tftbridge) by K. Hui — this repo has an enhanced version plus all the companion config you need.
+I got my BTT TFT35 V3.0 fully working with Klipper on an Ender 5 Plus using the stock BTT firmware and tftbridge. There's a lot of incomplete info out there, so I'm documenting everything that actually worked, including some enhancements I made to tftbridge and a hardware reset button mod. Hopefully this saves someone else the pain.
+
+I'm running **stock BTT firmware** (not the Klipper fork) because it's more stable and better tested. The bridge is [tftbridge](https://github.com/oldhui-uk/tftbridge) by K. Hui. This repo has an enhanced version plus all the companion config you need.
 
 **Further reading:**
-- [remote_host.md](remote_host.md) — how the print monitoring protocol works and slicer setup for layer tracking
-- [klipper_marlin_compat.md](klipper_marlin_compat.md) — full Marlin feature → Klipper compatibility map for TFT35 touch mode
+- [remote_host.md](remote_host.md): how the print monitoring protocol works and slicer setup for layer tracking
+- [klipper_marlin_compat.md](klipper_marlin_compat.md): full Marlin feature to Klipper compatibility map for TFT35 touch mode
 
 ---
 
@@ -46,7 +48,7 @@ That's what tftbridge does. But the original has some gaps when you're printing 
 
 ### 1. Race Condition Fix
 
-The original checks `self.tftSerial` and `self.klipperSerial` for None and then uses them — but on disconnect, another thread can set them to None between the check and the write. Fix is to snapshot to local variables first:
+The original checks `self.tftSerial` and `self.klipperSerial` for None and then uses them, but on disconnect, another thread can set them to None between the check and the write. Fix is to snapshot to local variables first:
 
 ```python
 tftSer = self.tftSerial
@@ -97,7 +99,7 @@ def _monitor_callback(self, eventtime):
     return eventtime + interval
 ```
 
-This gives you a live progress bar, time remaining, and layer counter on the TFT during Mainsail prints. Layer counter requires your slicer to emit `SET_PRINT_STATS_INFO CURRENT_LAYER=x TOTAL_LAYER=y` — see [remote_host.md](remote_host.md) for slicer setup.
+This gives you a live progress bar, time remaining, and layer counter on the TFT during Mainsail prints. Layer counter requires your slicer to emit `SET_PRINT_STATS_INFO CURRENT_LAYER=x TOTAL_LAYER=y`. See [remote_host.md](remote_host.md) for slicer setup.
 
 ### 4. TFT_NOTIFY G-code Command
 
@@ -157,7 +159,7 @@ probing_z_offset:0        ; if your probe IS the Z endstop, no offset needed
 
 ### Getting the ABL Menu to Appear
 
-This one took me a while. The ABL menu button disappears if the TFT doesn't detect bed leveling. The stock BTT binary looks for the string "Auto Bed Leveling" in the M503 response — `Cap:AUTOLEVEL:1` from M115 is not enough. Add this stub to `klipper_tft.cfg`:
+This one took me a while. The ABL menu button disappears if the TFT doesn't detect bed leveling. The stock BTT binary looks for the string "Auto Bed Leveling" in the M503 response. `Cap:AUTOLEVEL:1` from M115 is not enough. Add this stub to `klipper_tft.cfg`:
 
 ```ini
 [gcode_macro M503]
@@ -173,19 +175,19 @@ gcode:
 
 This is machine-specific, but it's worth knowing about if you're running TMC drivers in StealthChop mode.
 
-The TFT triggers fast travel moves — homing, parking after cancel, moving to mesh probe points. Without `stealthchop_threshold` set, those moves stay in StealthChop at high speed, where PWM regulation gets unstable and you get audible noise. Set `stealthchop_threshold` to your noise onset speed and it switches to SpreadCycle above that, quiet StealthChop below it during printing.
+The TFT triggers fast travel moves: homing, parking after cancel, moving to mesh probe points. Without `stealthchop_threshold` set, those moves stay in StealthChop at high speed, where PWM regulation gets unstable and you get audible noise. Set `stealthchop_threshold` to your noise onset speed and it switches to SpreadCycle above that, quiet StealthChop below it during printing.
 
-To find your threshold, use `gcode/x_noise_threshold_test.gcode`. It steps X-only from 200mm/s to 350mm/s in fine increments, 4 passes each, with a `TFT_NOTIFY` pop-up at each level so you know exactly which speed you're hearing. Note where the noise starts and set that as your threshold. Y axis may be different from X if it drives more mass or multiple belts — test each one separately.
+To find your threshold, use `gcode/x_noise_threshold_test.gcode`. It steps X-only from 200mm/s to 350mm/s in fine increments, 4 passes each, with a `TFT_NOTIFY` pop-up at each level so you know exactly which speed you're hearing. Note where the noise starts and set that as your threshold. Y axis may be different from X if it drives more mass or multiple belts, so test each one separately.
 
 One thing I'll mention: I spent a lot of time chasing step skipping that turned out to be damaged hardware. My screen shorted and took out the MCU board and PSU with it. After I replaced them everything improved dramatically. If you're seeing unexplained skipping or erratic TMC behavior, rule out hardware damage before you go deep on tuning.
 
 ---
 
-## Hardware Mod: TFT Reset Button → Klipper FIRMWARE_RESTART
+## Hardware Mod: TFT Reset Button to Klipper FIRMWARE_RESTART
 
 The TFT35 has a reset button. I wired it to GPIO18 (physical pin 12) on the Pi so pressing it resets both the TFT and Klipper at the same time.
 
-I went with the Moonraker API approach rather than a Klipper `[button]`. The reason: if Klipper is crashed or frozen — which is exactly when you need the reset button — the host MCU won't respond either. Moonraker runs in a completely separate process and can restart Klipper from the outside even when Klipper is halted.
+I went with the Moonraker API approach rather than a Klipper `[button]`. The reason: if Klipper is crashed or frozen, which is exactly when you need the reset button, the host MCU won't respond either. Moonraker runs in a completely separate process and can restart Klipper from the outside even when Klipper is halted.
 
 ### Setup
 
@@ -205,11 +207,11 @@ sudo systemctl start tft-reset.service
 
 I wrote three test files that are useful beyond this specific setup.
 
-**`gcode/speed_pattern_test.gcode`** — holds accel constant and sweeps speed across X/Y lines, diagonals, squares, and circles. Finds the speed limit for your machine.
+**`gcode/speed_pattern_test.gcode`**: holds accel constant and sweeps speed across X/Y lines, diagonals, squares, and circles. Finds the speed limit for your machine.
 
-**`gcode/accel_limit_test.gcode`** — holds speed constant and sweeps accel from 3000 to 10000mm/s² using short 50mm oscillating moves, so every reversal is a full accel/decel cycle. Uses `TFT_NOTIFY` to pop the current level on the TFT so you know exactly which accel was running when a skip happens.
+**`gcode/accel_limit_test.gcode`**: holds speed constant and sweeps accel from 3000 to 10000mm/s² using short 50mm oscillating moves, so every reversal is a full accel/decel cycle. Uses `TFT_NOTIFY` to pop the current level on the TFT so you know exactly which accel was running when a skip happens.
 
-**`gcode/x_noise_threshold_test.gcode`** — X-only moves stepping in fine increments. Finds your exact StealthChop noise threshold for X. Adapt it for Y by swapping the axis and fixing the other one.
+**`gcode/x_noise_threshold_test.gcode`**: X-only moves stepping in fine increments. Finds your exact StealthChop noise threshold for X. Adapt it for Y by swapping the axis and fixing the other one.
 
 All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the end.
 
@@ -217,9 +219,9 @@ All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the
 
 ## What Still Doesn't Work
 
-- Print from TFT SD card — not tested, not a priority when I have Mainsail
+- Print from TFT SD card, not tested, not a priority when I have Mainsail
 - Some menu items are stubs (M92 e-steps, M501/M502 EEPROM restore/reset)
-- Terminal screen in the TFT menu — sends commands but responses are inconsistent
+- Terminal screen in the TFT menu, sends commands but responses are inconsistent
 
 ---
 
@@ -235,7 +237,7 @@ All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the
 | Load/unload filament | ✅ Working |
 | Emergency stop | ✅ Working |
 | Manual leveling corners | ✅ Working |
-| TFT reset button → Klipper restart | ✅ Working |
+| TFT reset button to Klipper restart | ✅ Working |
 | TFT_NOTIFY from G-code | ✅ Working |
 | Print from TFT SD | ❓ Not tested |
 
