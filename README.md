@@ -239,4 +239,4 @@ All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the
 | TFT_NOTIFY from G-code | ✅ Working |
 | Print from TFT SD | ❓ Not tested |
 
-Happy to answer questions.
+Happy to answer questions. Full config and files are at https://github.com/hselomein/tftbridge-klipper-enhancements
