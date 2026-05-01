@@ -217,6 +217,43 @@ All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the
 
 ---
 
+## Filament Runout and Change
+
+My Bowden tube is about 1m long, so I sized the runout delay to match. When the sensor triggers, I don't want to stop the print immediately -- I want to keep printing until the remaining filament in the tube is consumed. That way there's still something to grip when I go to pull the old spool out, and I don't end up with a random mid-layer pause with a half-meter of filament still sitting in the tube.
+
+The math is based on Marlin's `FILAMENT_RUNOUT_DISTANCE_MM`. I set it to 900mm, which leaves about 100mm of stub at the nozzle end -- enough to grab, not so much that it's in the way.
+
+### How it works
+
+The sensor uses `pause_on_runout: false` and calls `FILAMENT_RUNOUT` immediately. That macro records `printer.print_stats.filament_used` at that moment and kicks off a `_RUNOUT_MONITOR` delayed_gcode that polls every 2 seconds. When the consumed amount hits 900mm, it calls M600.
+
+The TFT gets a pop-up when runout fires ("Runout detected - 900mm remaining") and a progress update every 2 seconds while it counts down.
+
+### M600 sequence
+
+1. Save gcode state
+2. Pause
+3. Retract 2mm fast, raise Z by 20mm (clamped to max), park head at X10 Y10
+4. Unload 100mm at retract speed
+5. Save the nozzle target temp, set idle timeout to 12 hours, turn off the nozzle
+6. Pop up "Load filament then resume" on the TFT
+
+The bed stays on. Steppers stay enabled. The custom `[idle_timeout]` section checks whether a filament change is pending before doing anything -- if it is, it just logs a message and leaves everything alone. This matters because the default idle_timeout would turn off the heaters and disable the steppers, which would let the part cool and release from the bed.
+
+### Resume sequence
+
+1. Clear the pending flag, restore the normal idle timeout
+2. If the bed dropped more than 5C below target, wait for it to come back up (M190)
+3. Reheat the nozzle to what it was before (M109, blocking)
+4. Purge 50mm at 180mm/min
+5. Prime 5mm at 300mm/min
+6. Restore gcode state (no move -- head is already at the park position)
+7. Hand off to RESUME_BASE
+
+No homing. The Ender 5 Plus homes Z to 0 which is the bed, so homing during a filament change would drive the nozzle into the part.
+
+---
+
 ## What Still Doesn't Work
 
 - Print from TFT SD card, not tested, not a priority when I have Mainsail
@@ -239,6 +276,7 @@ All three use `TFT_NOTIFY` for status pop-ups and restore velocity limits at the
 | Manual leveling corners | ✅ Working |
 | TFT reset button to Klipper restart | ✅ Working |
 | TFT_NOTIFY from G-code | ✅ Working |
+| Filament runout with 900mm delay | ✅ Working |
 | Print from TFT SD | ❓ Not tested |
 
 Happy to answer questions. Full config and files are at https://github.com/hselomein/tftbridge-klipper-enhancements
