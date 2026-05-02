@@ -38,8 +38,6 @@ That's what tftbridge does. But the original has some gaps when you're printing 
 | `tftbridge.py` | `~/klipper/klippy/extras/tftbridge.py` | Enhanced Klipper extra |
 | `klipper_tft.cfg` | `~/printer_data/config/klipper_tft.cfg` | Companion macros |
 | `printer.cfg` | `~/printer_data/config/printer.cfg` | Example config (Ender 5 Plus) |
-| `tft_reset.py` | `/home/pi/tft_reset.py` | GPIO reset button script |
-| `tft-reset.service` | `/etc/systemd/system/tft-reset.service` | systemd service for reset button |
 | `gcode/` | `~/printer_data/gcodes/` | Motion test files |
 
 ---
@@ -221,27 +219,25 @@ One thing I'll mention: I spent a lot of time chasing step skipping that turned 
 
 ---
 
-## Hardware Mod: TFT Reset Button to Klipper FIRMWARE_RESTART
+## Hardware Mod: TFT Reset Button to Klipper Emergency Stop
 
-The TFT35 has a reset button. I wired it to GPIO18 (physical pin 12) on the Pi so pressing it resets both the TFT and Klipper at the same time.
+The TFT35 has a reset button. I wired it to GPIO18 (physical pin 12) on the Pi so pressing it triggers an emergency stop in Klipper at the same time the TFT resets.
 
-I went with the Moonraker API approach rather than a Klipper `[button]`. The reason: if Klipper is crashed or frozen, which is exactly when you need the reset button, the host MCU won't respond either. Moonraker runs in a completely separate process and can restart Klipper from the outside even when Klipper is halted.
+Moonraker has a built-in `[button]` component that handles GPIO directly — no separate Python script or systemd service needed. Moonraker runs in a completely separate process from Klipper, so the button works even when Klipper is crashed or frozen.
 
-The script checks print state before acting:
-- **Mid-print**: calls `emergency_stop` — stops the print immediately, same as M112
-- **Not printing**: calls `firmware_restart` — full clean restart as before
+Add this to `moonraker.conf`:
 
-### Setup
-
-```bash
-sudo apt install python3-lgpio
-sudo cp tft_reset.py /home/pi/tft_reset.py
-sudo cp tft-reset.service /etc/systemd/system/tft-reset.service
-sudo systemctl enable tft-reset.service
-sudo systemctl start tft-reset.service
+```ini
+[button tft_reset]
+type: gpio
+pin: gpio18
+on_press:
+  {% do call_method("printer.emergency_stop") %}
 ```
 
-**Wiring**: GPIO18 (pin 12) to one side of the TFT reset button, GND (pin 14) to the other. The script uses the internal pull-up. Press the button, the TFT resets and Klipper does a FIRMWARE_RESTART via Moonraker. Mainsail reconnects automatically.
+Restart Moonraker and the button is live. Pressing it triggers emergency stop immediately — same behaviour as the emergency stop button in Mainsail. After pressing, click **Firmware Restart** in Mainsail to recover.
+
+**Wiring**: GPIO18 (pin 12) to one side of the TFT reset button, GND (pin 14) to the other. Moonraker uses the internal pull-up.
 
 ---
 
@@ -316,7 +312,7 @@ No homing. The Ender 5 Plus homes Z to 0 which is the bed, so homing during a fi
 | Load/unload filament | ✅ Working |
 | Emergency stop | ✅ Working |
 | Manual leveling corners | ✅ Working |
-| TFT reset button to Klipper restart | ✅ Working |
+| TFT reset button emergency stop | ✅ Working |
 | TFT_NOTIFY from G-code | ✅ Working |
 | Filament runout with 900mm delay | ✅ Working |
 | Print from TFT SD | ❓ Not tested |
