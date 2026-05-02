@@ -1,25 +1,7 @@
 #
-# BigTreeTech TFT35 bridge
+#BigTreeTech TFT35 bridge
 #
-# Original author: K. Hui (https://github.com/oldhui-uk/tftbridge)
-#
-# Enhancements in this fork:
-#   - Race condition fix: tftSerial/klipperSerial snapshotted to local
-#     variables before use so a disconnect on another thread can't null
-#     them between the None-check and the write
-#   - ok-prefix injection: bare temperature report lines from Klipper
-#     lack an 'ok' prefix, which stalls the TFT command queue in
-#     remote-host mode; this prepends 'ok' so the queue stays moving
-#   - Print state monitoring: reactor timer polls print_stats and
-#     virtual_sdcard and sends //action:print_start/pause/resume/
-#     print_end/cancel plus Data Left / Time Left / Layer Left
-#     notifications during Mainsail/Fluidd prints
-#   - TFT_NOTIFY command: G-code command that writes
-#     //action:notification directly to TFT serial, bypassing
-#     klippy.serial (RESPOND cannot reach tftbridge in remote-host mode)
-#   - Notification filtering: suppresses "pending gcode released" as a
-#     TFT pop-up (still logged); shows "must home" as a dismissible
-#     prompt dialog instead of a plain notification
+#Author: K. Hui
 #
 import re
 import serial
@@ -29,7 +11,7 @@ import logging
 _TEMP_RE = re.compile(r'^[BT]\d*:')
 
 _log = logging.getLogger('tftbridge')
-_log.setLevel(logging.WARNING)
+_log.setLevel(logging.DEBUG)
 _fh = logging.FileHandler('/home/pi/tftbridge.log')
 _fh.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
 _log.addHandler(_fh)
@@ -59,6 +41,7 @@ class TftBridge:
 		#last known print state for transition detection
 		#
 		self.last_print_state = 'standby'
+		self._notify_idx = 0
 		#
 		#register event handlers
 		#
@@ -144,6 +127,10 @@ class TftBridge:
 						if b'M108' in line:
 							tftSer.write(b'//action:prompt_end\n')
 							_log.debug('INJECTED: prompt_end')
+						if b'M115' in line:
+							#TFT rebooted -- force monitor to re-send print_start
+							self.last_print_state = 'standby'
+							_log.debug('TFT reboot detected, reset print state')
 				except:
 					pass
 
@@ -187,6 +174,8 @@ class TftBridge:
 						elif line.strip()=='echo: ok':
 							continue
 						elif line.startswith('// '):
+							if 'pending gcode' in line.lower():
+								continue
 							line=line[3:]
 						#proactive temp reports lack 'ok' -- add it so the TFT
 						#command queue stays unblocked in remote host print mode
@@ -248,33 +237,48 @@ class TftBridge:
 			elif state == 'standby' and last != 'standby':
 				self.last_print_state = 'standby'
 
+			#proactive temperature report -- keeps TFT ACK timer from expiring
+			#when Klipper is busy with fast motion and slow to respond to M105
+			try:
+				e_st = self.printer.lookup_object('extruder').get_status(eventtime)
+				b_st = self.printer.lookup_object('heater_bed').get_status(eventtime)
+				self._tft_write('ok T:%.1f /%.1f B:%.1f /%.1f @:0 B@:0\n' % (
+					e_st['temperature'], e_st['target'],
+					b_st['temperature'], b_st['target']))
+			except Exception:
+				pass
+
 			#progress updates while active
 			if state in ('printing','paused'):
-				file_size = int(vsd.get('file_size', 0))
-				file_pos  = int(vsd.get('file_position', 0))
-				if file_size > 0:
-					self._tft_write('//action:notification Data Left %d/%d\n' % (file_pos, file_size))
-
-				duration = float(ps.get('print_duration', 0))
-				progress = float(vsd.get('progress', 0))
-				if progress > 0.001 and duration > 0:
-					remaining = int((duration / progress) - duration)
-					rh = remaining // 3600
-					rm = (remaining % 3600) // 60
-					rs = remaining % 60
-					self._tft_write('//action:notification Time Left %dh%dm%ds\n' % (rh, rm, rs))
-
-				info      = ps.get('info', {})
+				#layer info every cycle; alternate Data Left / Time Left to
+				#reduce serial writes from 3 to 2 per interval
+				info        = ps.get('info', {})
 				cur_layer   = int(info.get('current_layer', 0) or 0)
 				total_layer = int(info.get('total_layer', 0) or 0)
 				if total_layer > 0:
 					z_pos = self.printer.lookup_object('toolhead').get_position()[2]
 					self._tft_write('//action:notification Layer Left %d/%d Z%.2fmm\n' % (cur_layer, total_layer, z_pos))
 
+				if self._notify_idx % 2 == 0:
+					file_size = int(vsd.get('file_size', 0))
+					file_pos  = int(vsd.get('file_position', 0))
+					if file_size > 0:
+						self._tft_write('//action:notification Data Left %d/%d\n' % (file_pos, file_size))
+				else:
+					duration = float(ps.get('print_duration', 0))
+					progress = float(vsd.get('progress', 0))
+					if progress > 0.001 and duration > 0:
+						remaining = int((duration / progress) - duration)
+						rh = remaining // 3600
+						rm = (remaining % 3600) // 60
+						rs = remaining % 60
+						self._tft_write('//action:notification Time Left %dh%dm%ds\n' % (rh, rm, rs))
+				self._notify_idx += 1
+
 		except Exception:
 			_log.exception('_monitor_callback error')
 
-		interval = 3.0 if self.last_print_state in ('printing','paused') else 5.0
+		interval = 1.5 if self.last_print_state in ('printing','paused') else 5.0
 		return eventtime + interval
 
 	#

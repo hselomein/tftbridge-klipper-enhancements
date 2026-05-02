@@ -122,7 +122,7 @@ TFT_NOTIFY MSG="Hello TFT"
 
 ### 5. Suppressing Noisy Notifications
 
-"Pending gcode released" was popping up on the TFT every time Klipper flushed its queue after a motion error. It's useful in the logs but not as a pop-up every time. I filtered it out:
+"Pending gcode released" was popping up on the TFT every time Klipper flushed its queue after a motion error. It's useful in the logs but not as a pop-up every time. I filtered it out in both the `!! ` and `// ` prefix paths — Klipper routes it through both depending on context:
 
 ```python
 if line.startswith('!! '):
@@ -134,7 +134,45 @@ if line.startswith('!! '):
         ...
     else:
         line = '//action:notification ' + msg + '\n'
+elif line.startswith('// '):
+    if 'pending gcode' in line.lower():
+        continue
+    line = line[3:]
 ```
+
+### 6. ACK Timeout Prevention
+
+The TFT sends M105 periodically and expects `ok` back within its ACK timeout. During high-acceleration motion Klipper is too busy to respond to M105 in time, which triggers an "ACK timedout" popup on the TFT.
+
+Fix is to proactively push a fresh `ok T:... B:...` to the TFT from `_monitor_callback` every 1.5 seconds by reading heater temps directly from Klipper's objects — no waiting for M105 to be processed:
+
+```python
+try:
+    e_st = self.printer.lookup_object('extruder').get_status(eventtime)
+    b_st = self.printer.lookup_object('heater_bed').get_status(eventtime)
+    self._tft_write('ok T:%.1f /%.1f B:%.1f /%.1f @:0 B@:0\n' % (
+        e_st['temperature'], e_st['target'],
+        b_st['temperature'], b_st['target']))
+except Exception:
+    pass
+```
+
+The callback interval is 1.5s during printing (down from 3s) so the heartbeat fires well within any reasonable ACK timeout window.
+
+Progress notifications (Data Left / Time Left / Layer Left) are round-robined — Layer Left sends every cycle, Data Left and Time Left alternate — reducing serial writes from 3 to 2 per interval to keep the TFT's receive buffer clear.
+
+### 7. TFT Reboot Detection
+
+When the TFT resets mid-print (physical button or power glitch), it sends M115 on boot. Without handling this, `_monitor_callback` never re-sends `//action:print_start` because `last_print_state` is still `'printing'` and there's no state transition to detect.
+
+Fix is to watch for M115 in `tft2klipper` and reset `last_print_state`:
+
+```python
+if b'M115' in line:
+    self.last_print_state = 'standby'
+```
+
+On the next 1.5s callback the monitor sees a `standby → printing` transition and re-sends `print_start` followed immediately by `ok T:...`. The TFT re-enters print mode without interrupting the print.
 
 ---
 
@@ -188,6 +226,10 @@ One thing I'll mention: I spent a lot of time chasing step skipping that turned 
 The TFT35 has a reset button. I wired it to GPIO18 (physical pin 12) on the Pi so pressing it resets both the TFT and Klipper at the same time.
 
 I went with the Moonraker API approach rather than a Klipper `[button]`. The reason: if Klipper is crashed or frozen, which is exactly when you need the reset button, the host MCU won't respond either. Moonraker runs in a completely separate process and can restart Klipper from the outside even when Klipper is halted.
+
+The script checks print state before acting:
+- **Mid-print**: calls `emergency_stop` — stops the print immediately, same as M112
+- **Not printing**: calls `firmware_restart` — full clean restart as before
 
 ### Setup
 
